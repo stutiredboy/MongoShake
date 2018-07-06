@@ -80,7 +80,7 @@
 			"revisionTime": "2018-05-16T06:55:53Z"
 		},
 		{
-			"checksumSHA1": "gL6TqIFDgQjh/JXuVFEFYftfF8E=",
+			"checksumSHA1": "DqnKbupL7yiSYpmgKt30Uzp6Zlc=",
 			"path": "github.com/vinllen/mgo/bson",
 			"revision": "e602c6ee54c2e70da4ef82edf107115057218616",
 			"revisionTime": "2018-05-16T06:55:53Z"
@@ -103,6 +103,5 @@
 			"revision": "e602c6ee54c2e70da4ef82edf107115057218616",
 			"revisionTime": "2018-05-16T06:55:53Z"
 		}
-	],
-	"rootPath": "github.com/stutiredboy/mongo-shake/src"
+	]
 }
