@@ -3,15 +3,20 @@
 set -o errexit
 
 # compile specified module
-modules=(collector)
+modules=(collector receiver)
 
 tags=""
 
 # older version Git don't support --short !
-#branch=`git symbolic-ref --short -q HEAD`
-branch=$(git symbolic-ref -q HEAD | awk -F'/' '{print $3;}')
-cid=$(git rev-parse HEAD)
-version=$branch","$cid
+if [ -d ".git" ];then
+    #branch=`git symbolic-ref --short -q HEAD`
+    branch=$(git symbolic-ref -q HEAD | awk -F'/' '{print $3;}')
+    cid=$(git rev-parse HEAD)
+else
+    branch="unknown"
+    cid="0.0"
+fi
+branch=$branch","$cid
 
 output=./bin/
 
@@ -30,7 +35,7 @@ if [ -z "$DEBUG" ]; then
     DEBUG=0
 fi
 
-info="mongoshake/common.VERSION=$version"
+info="mongoshake/common.BRANCH=$branch"
 # inject program information about compile
 if [ $DEBUG -eq 1 ]; then
 	echo "[ BUILD DEBUG ]"
@@ -45,8 +50,8 @@ goversion=$(go version | awk -F' ' '{print $3;}')
 info=$info","$goversion
 bigVersion=$(echo $goversion | awk -F'[o.]' '{print $2}')
 midVersion=$(echo $goversion | awk -F'[o.]' '{print $3}')
-if  [ $bigVersion -lt "1" -o $bigVersion -eq "1" -a $midVersion -lt "10" ]; then
-    echo "go version[$goversion] must >= 1.10"
+if  [ $bigVersion -lt "1" -o $bigVersion -eq "1" -a $midVersion -lt "9" ]; then
+    echo "go version[$goversion] must >= 1.9"
     exit 1
 fi
 

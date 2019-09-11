@@ -35,7 +35,7 @@ func main() {
 	flag.Parse()
 
 	if *configuration == "" {
-		fmt.Println(utils.VERSION)
+		fmt.Println(utils.BRANCH)
 		panic(Exit{0})
 	}
 
@@ -150,6 +150,9 @@ func sanitizeOptions() error {
 		conf.Options.ShardKey != oplog.ShardByID &&
 		conf.Options.ShardKey != oplog.ShardAutomatic {
 		return errors.New("shard key type is unknown")
+	}
+	if conf.Options.SyncerReaderBufferTime == 0 {
+		return errors.New("syncer buffer time can't be 0")
 	}
 	if conf.Options.WorkerNum <= 0 || conf.Options.WorkerNum > 256 {
 		return errors.New("worker numeric is not valid")

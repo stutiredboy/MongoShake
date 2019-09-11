@@ -16,9 +16,8 @@ import (
 )
 
 const (
-	//FetcherBufferCapacity   = 32
-	FetcherBufferCapacity   = 256
-	AdaptiveBatchingMaxSize = 16384 // 16k
+	// FetcherBufferCapacity   = 256
+	// AdaptiveBatchingMaxSize = 16384 // 16k
 
 	// bson deserialize workload is CPU-intensive task
 	PipelineQueueMaxNr = 4
@@ -69,6 +68,13 @@ type OplogSyncer struct {
 	replMetric *utils.ReplicationMetric
 }
 
+/*
+ * Syncer is used to fetch oplog from source MongoDB and then send to different workers which can be seen as
+ * a network sender. There are several syncer coexist to improve the fetching performance.
+ * The data flow in syncer is:
+ * source mongodb --> reader --> pending queue(raw data) --> logs queue(parsed data) --> worker
+ * The reason we split pending queue and logs queue is to improve the performance.
+ */
 func NewOplogSyncer(
 	coordinator *ReplicationCoordinator,
 	replset string,
@@ -121,10 +127,12 @@ func (sync *OplogSyncer) init() {
 	sync.RestAPI()
 }
 
+// bind different worker
 func (sync *OplogSyncer) bind(w *Worker) {
 	sync.batcher.workerGroup = append(sync.batcher.workerGroup, w)
 }
 
+// start to polling oplog
 func (sync *OplogSyncer) start() {
 	LOG.Info("Poll oplog syncer start. ckpt_interval[%dms], gid[%s], shard_key[%s]",
 		conf.Options.CheckpointInterval, conf.Options.OplogGIDS, conf.Options.ShardKey)
@@ -152,6 +160,7 @@ func (sync *OplogSyncer) start() {
 	}
 }
 
+// fetch all oplog from logs queue, batched together and then send to different workers.
 func (sync *OplogSyncer) startBatcher() {
 	var batcher = sync.batcher
 
@@ -170,6 +179,7 @@ func (sync *OplogSyncer) startBatcher() {
 	})
 }
 
+// how many pending queue we create
 func calculatePendingQueueConcurrency() int {
 	// single {pending|logs}queue while it'is multi source shard
 	if conf.Options.IsShardCluster() {
@@ -178,6 +188,7 @@ func calculatePendingQueueConcurrency() int {
 	return PipelineQueueMaxNr
 }
 
+// deserializer: fetch oplog from pending queue, parsed and then add into logs queue.
 func (sync *OplogSyncer) startDeserializer() {
 	parallel := calculatePendingQueueConcurrency()
 	sync.pendingQueue = make([]chan []*bson.Raw, parallel, parallel)
@@ -204,6 +215,7 @@ func (sync *OplogSyncer) deserializer(index int) {
 	}
 }
 
+// only master(maybe several mongo-shake starts) can poll oplog.
 func (sync *OplogSyncer) poll() {
 	// we should reload checkpoint. in case of other collector
 	// has fetched oplogs when master quorum leader election
@@ -216,6 +228,7 @@ func (sync *OplogSyncer) poll() {
 		return
 	}
 	sync.reader.SetQueryTimestampOnEmpty(checkpoint.Timestamp)
+	sync.reader.StartFetcher() // start reader fetcher if not exist
 
 	// every syncer should under the control of global rate limiter
 	rc := sync.coordinator.rateController
@@ -246,6 +259,7 @@ func (sync *OplogSyncer) poll() {
 	}
 }
 
+// fetch oplog from reader.
 func (sync *OplogSyncer) next() bool {
 	var log *bson.Raw
 	var err error
@@ -255,10 +269,11 @@ func (sync *OplogSyncer) next() bool {
 		sync.replMetric.SetOplogMax(payload)
 		sync.replMetric.SetOplogAvg(payload)
 		sync.replMetric.ReplStatus.Clear(utils.FetchBad)
-	}
-
-	if err != nil && err != TimeoutError {
-		LOG.Warn("Oplog syncer internal error : %s", err.Error())
+	} else if err == CollectionCappedError {
+		LOG.Error("oplog collection capped error, users should fix it manually")
+		return false
+	} else if err != nil && err != TimeoutError {
+		LOG.Error("oplog syncer internal error: %v", err)
 		// error is nil indicate that only timeout incur syncer.next()
 		// return false. so we regardless that
 		sync.replMetric.ReplStatus.Update(utils.FetchBad)
@@ -280,12 +295,12 @@ func (sync *OplogSyncer) transfer(log *bson.Raw) bool {
 		flush = true
 	}
 
-	if len(sync.buffer) >= FetcherBufferCapacity || (flush && len(sync.buffer) != 0) {
+	if len(sync.buffer) >= conf.Options.FetcherBufferCapacity || (flush && len(sync.buffer) != 0) {
 		// we could simply ++syncer.resolverIndex. The max uint64 is 9223372036854774807
 		// and discard the skip situation. we assume nextQueueCursor couldn't be overflow
 		selected := int(sync.nextQueuePosition % uint64(len(sync.pendingQueue)))
 		sync.pendingQueue[selected] <- sync.buffer
-		sync.buffer = make([]*bson.Raw, 0, FetcherBufferCapacity)
+		sync.buffer = make([]*bson.Raw, 0, conf.Options.FetcherBufferCapacity)
 
 		sync.nextQueuePosition++
 		return true
@@ -324,7 +339,7 @@ func (sync *OplogSyncer) RestAPI() {
 	utils.HttpApi.RegisterAPI("/repl", nimo.HttpGet, func([]byte) interface{} {
 		return &Info{
 			Who:         conf.Options.CollectorId,
-			Tag:         utils.VERSION,
+			Tag:         utils.BRANCH,
 			ReplicaSet:  sync.replset,
 			Logs:        sync.replMetric.Get(),
 			LogsRepl:    sync.replMetric.Apply(),
@@ -343,6 +358,7 @@ func (sync *OplogSyncer) RestAPI() {
 	})
 }
 
+// as we mentioned before, Batcher is used to batch oplog before sending in order to improve performance.
 type Batcher struct {
 	// related oplog syncer. not owned
 	syncer *OplogSyncer
@@ -395,7 +411,7 @@ func (batcher *Batcher) batchMore() [][]*oplog.GenericOplog {
 	mergeBatch := <-syncer.logsQueue[batcher.currentQueue()]
 	// move to next available logs queue
 	batcher.moveToNextQueue()
-	for len(mergeBatch) < AdaptiveBatchingMaxSize &&
+	for len(mergeBatch) < conf.Options.AdaptiveBatchingMaxSize &&
 		len(syncer.logsQueue[batcher.currentQueue()]) > 0 {
 		// there has more pushed oplogs in next logs queue (read can't to be block)
 		// Hence, we fetch them by the way. and merge together

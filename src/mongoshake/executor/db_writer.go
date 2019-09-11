@@ -13,6 +13,10 @@ import(
 	LOG "github.com/vinllen/log4go"
 )
 
+const (
+	verisonMark = "$v"
+)
+
 type BasicWriter interface {
 	// insert operation
 	doInsert(database, collection string, metadata bson.M, oplogs []*OplogRecord,
@@ -121,9 +125,14 @@ func (cw *CommandWriter) doUpdate(database, collection string, metadata bson.M,
 		oplogs []*OplogRecord, upsert bool) error {
 	var updates []bson.M
 	for _, log := range oplogs {
+		oFiled := log.original.partialLog.Object
+		// we should handle the special case: "o" field may include "$v" in mongo-3.6 which is not support in mgo.v2 library
+		if _, ok := oFiled[verisonMark]; ok {
+			delete(oFiled, verisonMark)
+		}
 		updates = append(updates, bson.M{
 			"q":      log.original.partialLog.Query,
-			"u":      log.original.partialLog.Object,
+			"u":      oFiled,
 			"upsert": upsert,
 			"multi":  false})
 	}
@@ -234,23 +243,24 @@ func (bw *BulkWriter) doInsert(database, collection string, metadata bson.M, opl
 	for _, log := range oplogs {
 		inserts = append(inserts, log.original.partialLog.Object)
 	}
-	collectionHandle := bw.session.DB(database).C(collection)
+	// collectionHandle := bw.session.DB(database).C(collection)
+	bulk := bw.session.DB(database).C(collection).Bulk()
+	bulk.Unordered()
+	bulk.Insert(inserts...)
 
-	var err error
-	if err = collectionHandle.Insert(inserts...); err != nil {
-		return nil
-	}
-
-	if mgo.IsDup(err) {
-		HandleDuplicated(collectionHandle, oplogs, OpInsert)
-		// update on duplicated key occur
-		if dupUpdate {
-			LOG.Info("Duplicated document found. reinsert or update to [%s] [%s]", database, collection)
-			return bw.doUpdateOnInsert(database, collection, metadata, oplogs, conf.Options.ReplayerExecutorUpsert)
+	if _, err := bulk.Run(); err != nil {
+		if mgo.IsDup(err) {
+			HandleDuplicated(bw.session.DB(database).C(collection), oplogs, OpInsert)
+			// update on duplicated key occur
+			if dupUpdate {
+				LOG.Info("Duplicated document found. reinsert or update to [%s] [%s]", database, collection)
+				return bw.doUpdateOnInsert(database, collection, metadata, oplogs, conf.Options.ReplayerExecutorUpsert)
+			}
+			return nil
 		}
-		return nil
+		return err
 	}
-	return err
+	return nil
 }
 
 func (bw *BulkWriter) doUpdateOnInsert(database, collection string, metadata bson.M,
@@ -267,12 +277,16 @@ func (bw *BulkWriter) doUpdateOnInsert(database, collection string, metadata bso
 	}
 
 	bulk := bw.session.DB(database).C(collection).Bulk()
+	bulk.Unordered()
 	if upsert {
 		bulk.Upsert(update...)
 	} else {
 		bulk.Update(update...)
 	}
 	if _, err := bulk.Run(); err != nil {
+		if mgo.IsDup(err) {
+			return nil
+		}
 		return fmt.Errorf("doUpdateOnInsert run upsert/update[%v] failed[%v]", upsert, err)
 	}
 	return nil
@@ -282,16 +296,27 @@ func (bw *BulkWriter) doUpdate(database, collection string, metadata bson.M,
 		oplogs []*OplogRecord, upsert bool) error {
 	var update []interface{}
 	for _, log := range oplogs {
-		update = append(update, log.original.partialLog.Query, log.original.partialLog.Object)
+		oFiled := log.original.partialLog.Object
+		// we should handle the special case: "o" field may include "$v" in mongo-3.6 which is not support in mgo.v2 library
+		if _, ok := oFiled[verisonMark]; ok {
+			delete(oFiled, verisonMark)
+		}
+		update = append(update, log.original.partialLog.Query, oFiled)
 	}
 
 	bulk := bw.session.DB(database).C(collection).Bulk()
+	bulk.Unordered()
 	if upsert {
 		bulk.Upsert(update...)
 	} else {
 		bulk.Update(update...)
 	}
+
 	if _, err := bulk.Run(); err != nil {
+		if mgo.IsDup(err) {
+			HandleDuplicated(bw.session.DB(database).C(collection), oplogs, OpUpdate)
+			return nil
+		}
 		return fmt.Errorf("doUpdate run upsert/update[%v] failed[%v]", upsert, err)
 	}
 	return nil
@@ -305,6 +330,7 @@ func (bw *BulkWriter) doDelete(database, collection string, metadata bson.M,
 	}
 
 	bulk := bw.session.DB(database).C(collection).Bulk()
+	bulk.Unordered()
 	bulk.Remove(delete...)
 	if _, err := bulk.Run(); err != nil {
 		return fmt.Errorf("doDelete run delete[%v] failed[%v]", delete, err)
@@ -457,8 +483,17 @@ func (sw *SingleWriter) doUpdate(database, collection string, metadata bson.M,
 	var errMsgs []string
 	if upsert {
 		for _, log := range oplogs {
-			_, err := collectionHandle.Upsert(log.original.partialLog.Query, log.original.partialLog.Object)
-			if err != nil && mgo.IsDup(err) == false {
+			oFiled := log.original.partialLog.Object
+			// we should handle the special case: "o" filed may include "$v" in mongo-3.6 which is not support in mgo.v2 library
+			if _, ok := oFiled[verisonMark]; ok {
+				delete(oFiled, verisonMark)
+			}
+			_, err := collectionHandle.Upsert(log.original.partialLog.Query, oFiled)
+			if err != nil {
+				if mgo.IsDup(err) {
+					HandleDuplicated(collectionHandle, oplogs, OpUpdate)
+					continue
+				}
 				errMsg := fmt.Sprintf("doUpdate[upsert] old-data[%v] with new-data[%v] failed[%v]",
 					log.original.partialLog.Query, log.original.partialLog.Object, err)
 				errMsgs = append(errMsgs, errMsg)
@@ -466,10 +501,17 @@ func (sw *SingleWriter) doUpdate(database, collection string, metadata bson.M,
 		}
 	} else {
 		for _, log := range oplogs {
-			err := collectionHandle.Update(log.original.partialLog.Query, log.original.partialLog.Object)
-			if err != nil && mgo.IsDup(err) == false {
+			oFiled := log.original.partialLog.Object
+			// we should handle the special case: "o" filed may include "$v" in mongo-3.6 which is not support in mgo.v2 library
+			if _, ok := oFiled[verisonMark]; ok {
+				delete(oFiled, verisonMark)
+			}
+			err := collectionHandle.Update(log.original.partialLog.Query, oFiled)
+			if err != nil {
 				if isNotFound(err) {
 					LOG.Warn("doUpdate[update] data[%v] not found", log.original.partialLog.Query)
+				} else if mgo.IsDup(err) {
+					HandleDuplicated(collectionHandle, oplogs, OpUpdate)
 				} else {
 					errMsg := fmt.Sprintf("doUpdate[update] old-data[%v] with new-data[%v] failed[%v]",
 						log.original.partialLog.Query, log.original.partialLog.Object, err)

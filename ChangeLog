@@ -1,3 +1,53 @@
+2019-04-12 Alibaba Cloud.
+	* version: 1.4.6
+	* BUGFIX: fix bug of batched oplog size exceeding 16MB.
+
+2018-12-20 Alibaba Cloud.
+	* version: 1.4.5
+	* IMPROVE: modify `build.sh` to solve the problem of building error when
+	download zip from github instead of `git clone`.
+	* IMPROVE: modify error log level of `_id` type unknown.
+
+2018-11-27 Alibaba Cloud.
+	* version: 1.4.4
+	* BUG FIX: enable bulk.Unordered when using bulk writer, so all the
+	operations will be executed even some of them have failed. At the
+	mean time, disable `replayer.executor.upsert` and
+	`replayer.executor.insert_on_dup_update` by default.
+	* IMPROVE: filter config database.
+	* IMPROVE: print `_id` type and value when can't be hashed.
+	* IMPROVE: disbale print version in command.
+	* IMPROVE: add `adaptive.batching_max_size` and `fetcher.buffer_capacity`
+	in configuration so users can control the memory usage.
+	* BUG FIX: do not use bulk writer to operate index.
+
+2018-09-25 Alibaba Cloud.
+	* version: 1.4.3
+	* IMPROVE: stop syncing data when collection capped error happen in source
+	database.
+
+2018-09-19 Alibaba Cloud.
+	* version: 1.4.2
+	* BUG FIX: fix bug of `start.sh` script commited by `ManleyLiu`.
+	* BUG FIX: fix bug of error judge sentence in bulk writer commited by
+	`chensi01`.
+	* IMPROVE: add timeout configuration and flush strategy for the oplog
+	reader .
+	* IMPROVE: remove "send [0] logs" hint in log.
+
+2018-09-04 Alibaba Cloud.
+	* version: 1.4.1
+	* BUG FIX: fix bug of the time zone converter.
+
+2018-09-03 Alibaba Cloud.
+	* version: 1.4.0
+	* Feature: Add receiver which is used to connect to different tunnels
+	like rpc, tcp, file, mock and kafka.
+
+2018-08-08 Alibaba Cloud.
+	* version: 1.2.1
+	* BUG FIX: remove `$v` field in oplog to fix the bug in MongoDB 3.6.
+
 2018-07-29 Alibaba Cloud.
 	* version: 1.2.0
 	* Feature: Use general write instead of op_command. When the version is
@@ -6,9 +56,9 @@
 
 2018-07-18 Alibaba Cloud.
 	* version: 1.0.0
-	* BUG FIX: upsert/remove error when old value isn't exist
-	* BUG FIX: connect to Alibaba Cloud MongoDB instance without permission
-	* BUG FIX: some logs can't be print out when crash
+	* BUG FIX: upsert/remove error when old value isn't exist.
+	* BUG FIX: connect to Alibaba Cloud MongoDB instance without permission.
+	* BUG FIX: some logs can't be print out when crash.
 	
 2018-06-28 Alibaba Cloud.
 	* mongo-shake: initial release.
