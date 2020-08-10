@@ -1,10 +1,10 @@
 package replayer
 
-import(
-	"mongoshake/tunnel"
+import (
+	"mongoshake/common"
 	"mongoshake/modules"
 	"mongoshake/oplog"
-	"mongoshake/common"
+	"mongoshake/tunnel"
 
 	LOG "github.com/vinllen/log4go"
 	"github.com/vinllen/mgo/bson"
@@ -24,6 +24,8 @@ type ExampleReplayer struct {
 
 	// pending queue, use to pass message
 	pendingQueue chan *MessageWithCallback
+
+	id int // current replayer id
 }
 
 type MessageWithCallback struct {
@@ -31,10 +33,11 @@ type MessageWithCallback struct {
 	completion func()
 }
 
-func NewExampleReplayer() *ExampleReplayer {
+func NewExampleReplayer(id int) *ExampleReplayer {
 	LOG.Info("ExampleReplayer start. pending queue capacity %d", PendingQueueCapacity)
-	er := &ExampleReplayer {
+	er := &ExampleReplayer{
 		pendingQueue: make(chan *MessageWithCallback, PendingQueueCapacity),
+		id:           id,
 	}
 	go er.handler()
 	return er
@@ -110,17 +113,21 @@ func (er *ExampleReplayer) handler() {
 	for msg := range er.pendingQueue {
 		count := uint64(len(msg.message.RawLogs))
 		if count == 0 {
-			// may be probe request
+			// probe request
 			continue
 		}
 
 		// parse batched message
-		oplogs := make([]*oplog.PartialLog, len(msg.message.RawLogs), len(msg.message.RawLogs))
+		oplogs := make([]oplog.ParsedLog, len(msg.message.RawLogs))
 		for i, raw := range msg.message.RawLogs {
-			oplogs[i] = &oplog.PartialLog{}
-			bson.Unmarshal(raw, &oplogs[i])
-			oplogs[i].RawSize = len(raw)
-			LOG.Info(oplogs[i]) // just print for test
+			oplogs[i] = oplog.ParsedLog{}
+			if err := bson.Unmarshal(raw, &oplogs[i]); err != nil {
+				// impossible switch, need panic and exit
+				LOG.Crashf("unmarshal oplog[%v] failed[%v]", raw, err)
+				return
+			}
+			LOG.Info(oplogs[i]) // just print for test, users can modify to fulfill different needs
+			// fmt.Println(oplogs[i])
 		}
 
 		if callback := msg.completion; callback != nil {
@@ -129,8 +136,10 @@ func (er *ExampleReplayer) handler() {
 
 		// get the newest timestamp
 		n := len(oplogs)
-		lastTs := utils.TimestampToInt64(oplogs[n - 1].Timestamp)
+		lastTs := utils.TimestampToInt64(oplogs[n-1].Timestamp)
 		er.Ack = lastTs
+
+		LOG.Debug("handle ack[%v]", er.Ack)
 
 		// add logical code below
 	}

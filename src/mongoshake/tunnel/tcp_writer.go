@@ -10,8 +10,8 @@ import (
 
 	"mongoshake/common"
 
-	LOG "github.com/vinllen/log4go"
 	"github.com/gugemichael/nimo4go"
+	LOG "github.com/vinllen/log4go"
 )
 
 // Network packet structure
@@ -151,6 +151,10 @@ func (tcp *TcpSocket) ensureNetwork() error {
 func (tcp *TcpSocket) release() {
 	tcp.socket.Close()
 	tcp.socket = nil
+}
+
+func (tunnel *TCPWriter) Name() string {
+	return "rpc"
 }
 
 func (writer *TCPWriter) pollRemoteAckValue() {

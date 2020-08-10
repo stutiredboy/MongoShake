@@ -8,8 +8,9 @@ import (
 
 	"mongoshake/oplog"
 
-	LOG "github.com/vinllen/log4go"
 	"github.com/gugemichael/nimo4go"
+	LOG "github.com/vinllen/log4go"
+	"mongoshake/common"
 )
 
 const InitialStageChecking = false
@@ -41,11 +42,11 @@ type WMessage struct {
 	ParsedLogs []*oplog.PartialLog // parsed log
 }
 type TMessage struct {
-	Checksum   uint32
-	Tag        uint32
-	Shard      uint32
-	Compress   uint32
-	RawLogs    [][]byte
+	Checksum uint32
+	Tag      uint32
+	Shard    uint32
+	Compress uint32
+	RawLogs  [][]byte
 }
 
 func (msg *TMessage) Crc32() uint32 {
@@ -141,6 +142,11 @@ type Writer interface {
 	 * whether need parsed log or raw log
 	 */
 	ParsedLogsRequired() bool
+
+	/*
+	 * tunnel name
+	 */
+	Name() string
 }
 
 type WriterFactory struct {
@@ -151,17 +157,17 @@ type WriterFactory struct {
 // or usefully meta
 func (factory *WriterFactory) Create(address []string, workerId uint32) Writer {
 	switch factory.Name {
-	case "kafka":
+	case utils.VarTunnelKafka:
 		return &KafkaWriter{RemoteAddr: address[0]}
-	case "tcp":
+	case utils.VarTunnelTcp:
 		return &TCPWriter{RemoteAddr: address[0]}
-	case "rpc":
+	case utils.VarTunnelRpc:
 		return &RPCWriter{RemoteAddr: address[0]}
-	case "mock":
+	case utils.VarTunnelMock:
 		return &MockWriter{}
-	case "file":
+	case utils.VarTunnelFile:
 		return &FileWriter{Local: address[0]}
-	case "direct":
+	case utils.VarTunnelDirect:
 		return &DirectWriter{RemoteAddrs: address, ReplayerId: workerId}
 	default:
 		LOG.Critical("Specific tunnel not found [%s]", factory.Name)
@@ -173,16 +179,19 @@ func (factory *WriterFactory) Create(address []string, workerId uint32) Writer {
 // or usefully meta
 func (factory *ReaderFactory) Create(address string) Reader {
 	switch factory.Name {
-	case "kafka":
+	case utils.VarTunnelKafka:
 		return &KafkaReader{address: address}
-	case "tcp":
+	case utils.VarTunnelTcp:
 		return &TCPReader{listenAddress: address}
-	case "rpc":
+	case utils.VarTunnelRpc:
 		return &RPCReader{address: address}
-	case "mock":
+	case utils.VarTunnelMock:
 		return &MockReader{}
-	case "file":
+	case utils.VarTunnelFile:
 		return &FileReader{File: address}
+	case utils.VarTunnelDirect:
+		LOG.Critical("direct mode not supported in reader")
+		return nil
 	default:
 		LOG.Critical("Specific tunnel not found [%s]", factory.Name)
 		return nil

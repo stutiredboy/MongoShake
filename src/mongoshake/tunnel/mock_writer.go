@@ -1,11 +1,15 @@
 package tunnel
 
 import (
-	LOG "github.com/vinllen/log4go"
 	"github.com/gugemichael/nimo4go"
+	LOG "github.com/vinllen/log4go"
 )
 
 type MockWriter struct {
+}
+
+func (tunnel *MockWriter) Name() string {
+	return "mock"
 }
 
 func (tunnel *MockWriter) Send(message *WMessage) int64 {

@@ -6,8 +6,8 @@ import (
 	"io"
 	"net"
 
-	LOG "github.com/vinllen/log4go"
 	"github.com/gugemichael/nimo4go"
+	LOG "github.com/vinllen/log4go"
 )
 
 type TCPReader struct {
@@ -48,7 +48,7 @@ func (reader *TCPReader) Link(replayer []Replayer) (err error) {
 	nimo.GoRoutineInLoop(func() {
 		socket, err := reader.channel[TransferChannel].listener.AcceptTCP()
 		if err != nil {
-			LOG.Warn("Server accept ch error : %s", err.Error())
+			LOG.Warn("Server accept channel error : %s", err.Error())
 			return
 		}
 		socket.SetNoDelay(false)

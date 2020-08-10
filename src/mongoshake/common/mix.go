@@ -11,6 +11,7 @@ import (
 
 	LOG "github.com/vinllen/log4go"
 	"github.com/vinllen/mgo/bson"
+	"reflect"
 )
 
 func YieldInMs(n int64) {
@@ -82,8 +83,55 @@ func ExtractMongoTimestamp(ts interface{}) int64 {
 	return 0
 }
 
+func ExtractMongoTimestampCounter(ts interface{}) int64 {
+	switch src := ts.(type) {
+	case bson.MongoTimestamp:
+		return int64(src) & Int32max
+	case int64:
+		return src & Int32max
+	}
+
+	return 0
+}
+
+func ExtractTimestampForLog(ts interface{}) string {
+	return fmt.Sprintf("%v[%v, %v]", ts, ExtractMongoTimestamp(ts), ExtractMongoTimestampCounter(ts))
+}
+
 func Int64ToString(v int64) string {
 	return strconv.FormatInt(v, 10)
+}
+
+func ParseIntFromInterface(input interface{}) (int64, error) {
+	switch src := input.(type) {
+	case int:
+		return int64(src), nil
+	case int8:
+		return int64(src), nil
+	case int16:
+		return int64(src), nil
+	case int32:
+		return int64(src), nil
+	case int64:
+		return src, nil
+	case uint:
+		return int64(src), nil
+	case uint8:
+		return int64(src), nil
+	case uint16:
+		return int64(src), nil
+	case uint32:
+		return int64(src), nil
+	case uint64:
+		return int64(src), nil
+	case string:
+		v, err := strconv.Atoi(src)
+		return int64(v), err
+	default:
+		return 0, fmt.Errorf("unknown type[%v] with input[%v]", reflect.TypeOf(src), src)
+	}
+
+	panic("can't see me!")
 }
 
 // one writer and multi readers
@@ -147,8 +195,10 @@ func Mkdirs(dirs ...string) error {
 	return nil
 }
 
-func WritePidById(id string) bool {
-	dir, _ := os.Getwd()
+func WritePidById(dir, id string) bool {
+	if len(dir) == 0 {
+		dir, _ = os.Getwd()
+	}
 	pidfile := filepath.Join(dir, id) + ".pid"
 	if err := WritePid(pidfile); err != nil {
 		LOG.Critical("Process write pid and lock file failed : %v", err)
@@ -162,20 +212,20 @@ func Welcome() {
 		`______________________________
 \                             \           _         ______ |
  \                             \        /   \___-=O'/|O'/__|
-  \       Here we go !!!        \_______\          / | /    )
+  \  MongoShake, Here we go !!  \_______\          / | /    )
   /                             /        '/-==__ _/__|/__=-|  -GM
- /                             /         *             \ | |
+ /        Alibaba Cloud        /         *             \ | |
 /                             /                        (o)
 ------------------------------
 `
-
-	LOG.Warn(fmt.Sprintf("\n%s", welcome))
+	startMsg := "if you have any problem, please visit https://github.com/alibaba/MongoShake/wiki/FAQ"
+	LOG.Warn(fmt.Sprintf("\n%s\n%s\n", welcome, startMsg))
 }
 
 func Goodbye() {
 	goodbye := `
                 ##### | #####
-Ohh we crash ? # _ _ #|# _ _ #
+Oh we finish ? # _ _ #|# _ _ #
                #      |      #
          |       ############
                      # #

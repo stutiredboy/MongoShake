@@ -7,6 +7,7 @@ import (
 
 	"github.com/Shopify/sarama"
 	"github.com/rcrowley/go-metrics"
+	"mongoshake/common"
 )
 
 var (
@@ -35,6 +36,7 @@ func NewConfig() *Config {
 	config.Producer.Return.Errors = true
 	config.Producer.Return.Successes = true
 	config.Producer.Partitioner = sarama.NewManualPartitioner
+	config.Producer.MaxMessageBytes = 16 * utils.MB + 2 * utils.MB // 2MB for the reserve gap
 
 	return &Config{
 		Config: config,
@@ -54,6 +56,6 @@ func parse(address string) (string, []string, error) {
 		topic = arr[0]
 	}
 
-	brokers := strings.Split(arr[l - 1], brokersSplitter)
+	brokers := strings.Split(arr[l-1], brokersSplitter)
 	return topic, brokers, nil
 }

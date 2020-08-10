@@ -35,18 +35,23 @@ func (collectionHasher *TableHasher) DistributeOplogByMod(log *PartialLog, mod i
 		return DefaultHashValue
 	}
 
+	// when oplog is DDL, go into worker 0.
+	if log.Operation == "c" {
+		return 0
+	}
+
 	return stringHashValue(log.Namespace) % uint32(mod)
 }
 
 func GetIdOrNSFromOplog(log *PartialLog) interface{} {
 	switch log.Operation {
 	case "i", "d":
-		return log.Object["_id"]
+		return GetKey(log.Object, "")
 	case "u":
 		if id, ok := log.Query["_id"]; ok {
 			return id
 		} else {
-			return log.Object["_id"]
+			return GetKey(log.Object, "")
 		}
 	case "c":
 		return log.Namespace

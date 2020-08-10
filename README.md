@@ -1,8 +1,11 @@
 This is a brief introduction of Mongo-Shake, please visit [english wiki](https://github.com/aliyun/mongo-shake/wiki/MongoShake-Detailed-Documentation) or [chinese wiki](https://yq.aliyun.com/articles/603329) if you want to see more details including architecture, data flow, performance test, business showcase and so on.
 
 *  [English document](https://github.com/aliyun/mongo-shake/wiki/MongoShake-Detailed-Documentation)
-*  [Chinese document](https://yq.aliyun.com/articles/603329)
+*  [中文架构介绍文档](https://yq.aliyun.com/articles/603329)
+*  [第一次使用，如何配置](https://github.com/alibaba/MongoShake/wiki/%E7%AC%AC%E4%B8%80%E6%AC%A1%E4%BD%BF%E7%94%A8%EF%BC%8C%E5%A6%82%E4%BD%95%E8%BF%9B%E8%A1%8C%E9%85%8D%E7%BD%AE%EF%BC%9F)
+*  [Tutorial](https://github.com/alibaba/MongoShake/wiki/tutorial-about-how-to-set-up)
 *  [FAQ document](https://github.com/aliyun/mongo-shake/wiki/FAQ)
+*  [MongoShake最佳实践](https://yq.aliyun.com/articles/719704)
 *  [Performance test document](https://github.com/aliyun/mongo-shake/wiki/MongoShake-Performance-Document)
 *  [WeChat discuss group](https://github.com/aliyun/mongo-shake#shake-series-tool)
 
@@ -27,10 +30,15 @@ Hypervisor mechanism is also supported so that it will restart immediately when 
 ---
 Support filtering database and collection namespace with whitelist and blacklist.
 
+# DDL Syncing
+---
+Starting with version 1.5, MongoShake supports syncing DDL by using global barrier. Once fetching DDL oplog, MongoShake adds a barrier so that all the belowing oplogs waitting in the queue until this oplog is written into the target MongoDB or tunnel and the checkpoint is updated. Currently, DDL is only support for ReplicaSet on the source side(target side can be RelicaSet or Sharding), we will support Sharding in the later version.<br>
+![ddl](resources/ddl_support.png)<br>
+
 # Global ID
 ---
-In Aliyun internal version, global id(also called gid) is supported which marks the id of the database. It can be used to avoid loop when two databases become backup of each other. Mongo-Shake only fetches the oplogs equal to source database id, all the oplogs are be fetched when no gid gave. For current opensource version, it's not supported limited by the modification of MongoDB kernel.
-If you want to build active-active replication without `gid` supported, please visit [FAQ document](https://github.com/alibaba/MongoShake/wiki/FAQ) to see more details.
+In Aliyun internal version, global id(also called gid) is supported which marks the id of the database. It can be used to avoid loop when two databases become backup of each other. Mongo-Shake only fetches the oplogs equal to source database id, all the oplogs are be fetched when no gid gave. For current opensource version, it's not supported limited by the modification of MongoDB kernel.<br>
+If you want to build active-active replication without `gid` supported, please visit [FAQ document](https://github.com/alibaba/MongoShake/wiki/FAQ) to see more details.<br>
 
 # Tunnel
 ---
@@ -56,7 +64,7 @@ Please see the detail documents listed at the beginning if you want to see more 
 version rules: a.b.c.
 
 *  a: major version
-*  b: minor version. even number means stable version.
+*  b: minor version. **even number means stable version**. e.g. 1.2.x, 1.4.x, 2.0.x are stable while 1.5.x, 2.1.x aren't.
 *  c: bugfix version
 
 | branch name | rules |
@@ -72,9 +80,13 @@ add tag when releasing: "release-v{version}-{date}". for example: "release-v1.0.
 
 # Usage
 ---
-*  git clone https://github.com/aliyun/mongo-shake.git
-*  cd mongo-shake/src/vendor
-*  GOPATH=\`pwd\`/../..; govendor sync     #please note: must install govendor first and then pull all dependencies
+Run `./bin/collector.darwin64` or `collector.linux64` which is built in OSX and Linux respectively.<br>
+Or you can build mongo-shake yourself according to the following steps:
+*  git clone https://github.com/alibaba/MongoShake.git
+*  cd MongoShake
+*  export GOPATH=\`pwd\`
+*  cd src/vendor
+*  govendor sync    #please note: must install govendor first and then pull all dependencies: `go get -u github.com/kardianos/govendor`. Or, users can use govendor located in `tools` directory: `../../tools/govendor sync`
 *  cd ../../ && ./build.sh
 *  ./bin/collector -conf=conf/collector.conf #please note: user must modify collector.conf first to match needs. You can also use \"start.sh\" script which supports hypervisor mechanism in Linux OS only.
 
@@ -86,4 +98,22 @@ We also provide some tools for synchronization in Shake series.<br>
 * [RedisShake](https://github.com/aliyun/RedisShake): redis data synchronization tool.
 * [RedisFullCheck](https://github.com/aliyun/RedisFullCheck): redis data synchronization verification tool.
 
-Plus, we have a WeChat group so that users can join and discuss, but the group user number is limited. So please add my WeChat number: `vinllen_xingge` first, and I will add you to this group.<br>
+Plus, we have a DingDing(钉钉) group so that users can join and discuss, please scan the code.
+![DingDing](resources/dingding_group.png)<br>
+
+# Thanks
+---
+| Username | Mail |
+| :------: | :------: |
+| lydarkforest | linyunads1379@163.com |
+| diggzhang | diggzhang@gmail.com |
+| ManleyLiu | daywbdb@qq.com |
+| hustchensi | chensi_04@126.com |
+| HelloCodeMing | huanmingwong@163.com |
+| cocoakekeyu | cocoakekeyu@gmail.com |
+| lixj1103 | 244769542@qq.com |
+| xzshinan | shinan@gongchang.com |
+| tzjavadmg | codyzeng@163.com |
+| dx8439 | 171390022@qq.com |
+| monkeyWie |  |
+| raydy.yan | yajuyan@hotmail.com |

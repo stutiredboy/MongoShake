@@ -2,16 +2,20 @@ package executor
 
 import (
 	"fmt"
+	"strings"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"mongoshake/collector/configure"
+	"mongoshake/collector/transform"
 	"mongoshake/common"
 	"mongoshake/oplog"
 
-	LOG "github.com/vinllen/log4go"
 	"github.com/gugemichael/nimo4go"
+	LOG "github.com/vinllen/log4go"
 	"github.com/vinllen/mgo"
+	"github.com/vinllen/mgo/bson"
 )
 
 const (
@@ -29,7 +33,7 @@ const (
 )
 
 var (
-	GlobalExecutorId int32 = -1
+	GlobalExecutorId int32  = -1
 	ThresholdVersion string = "3.2.0"
 )
 
@@ -45,6 +49,10 @@ type BatchGroupExecutor struct {
 	ReplayerId uint32
 	// mongo url
 	MongoUrl string
+	// tranform namespace
+	NsTrans *transform.NamespaceTransform
+	// init sync finish timestamp
+	FullFinishTs int64
 }
 
 func (batchExecutor *BatchGroupExecutor) Start() {
@@ -52,10 +60,14 @@ func (batchExecutor *BatchGroupExecutor) Start() {
 	// conns = number of executor * number of batchExecutor. Normally max
 	// is 64. if collector hashed oplogRecords by _id and the number of collector
 	// is bigger we will use single executer in respective batchExecutor
-	parallel := conf.Options.ReplayerExecutor
+	parallel := conf.Options.IncrSyncExecutor
+	if len(conf.Options.TransformNamespace) > 0 {
+		batchExecutor.NsTrans = transform.NewNamespaceTransform(conf.Options.TransformNamespace)
+	}
 	executors := make([]*Executor, parallel)
 	for i := 0; i != len(executors); i++ {
 		executors[i] = NewExecutor(GenerateExecutorId(), batchExecutor, batchExecutor.MongoUrl)
+		executors[i].RestAPI()
 		go executors[i].start()
 	}
 	batchExecutor.executors = executors
@@ -95,7 +107,7 @@ func (batchExecutor *BatchGroupExecutor) replay(logs []*PartialLogWithCallbak) {
 	// In mongo shard cluster. our request goes into mongos. it's safe for
 	// unique index without collision detection
 	var matrix CollisionMatrix = &NoopMatrix{}
-	if conf.Options.ReplayerCollisionEnable {
+	if conf.Options.IncrSyncCollisionEnable {
 		matrix = NewBarrierMatrix()
 	}
 
@@ -171,6 +183,15 @@ type Executor struct {
 
 	// bulk insert or single insert
 	bulkInsert bool
+
+	// metric
+	metricInsert  uint64
+	metricUpdate  uint64
+	metricDelete  uint64
+	metricDDL     uint64
+	metricUnknown uint64
+	metricNoop    uint64
+	metricError   uint64
 }
 
 func GenerateExecutorId() int {
@@ -191,6 +212,7 @@ func (exec *Executor) start() {
 	for toBeExecuted := range exec.batchBlock {
 		nimo.AssertTrue(len(toBeExecuted) != 0, "the size of being executed batch oplogRecords could not be zero")
 		for exec.doSync(toBeExecuted) != nil {
+			time.Sleep(time.Second)
 		}
 		// acknowledge all oplogRecords have been successfully executed
 		exec.finisher.Add(-len(toBeExecuted))
@@ -205,11 +227,13 @@ func (exec *Executor) start() {
 func (exec *Executor) doSync(logs []*OplogRecord) error {
 	count := len(logs)
 
+	transLogs := transformLogs(logs, exec.batchExecutor.NsTrans, conf.Options.IncrSyncDBRef)
+
 	// split batched oplogRecords into (ns, op) groups. individual group
 	// can be accomplished in single MongoDB request. groups
 	// in this executor will be sequential
 	oplogGroups := LogsGroupCombiner{maxGroupNr: OplogsMaxGroupNum,
-		maxGroupSize: OplogsMaxGroupSize}.mergeToGroups(logs)
+		maxGroupSize: OplogsMaxGroupSize}.mergeToGroups(transLogs)
 	for _, group := range oplogGroups {
 		if err := exec.execute(group); err != nil {
 			return err
@@ -221,72 +245,133 @@ func (exec *Executor) doSync(logs []*OplogRecord) error {
 	return nil
 }
 
-type OplogsGroup struct {
-	ns           string
-	op           string
-	oplogRecords []*OplogRecord
-
-	completionList []func()
-}
-
-func (group *OplogsGroup) completion() {
-	for _, cb := range group.completionList {
-		cb()
+// if no need to transform namespace, return original logs
+// for no command log, transform namespace in DBRef by conf.Options.TransformDBRef
+// for command log, need transform namespace/collection in object of oplog
+func transformLogs(logs []*OplogRecord, nsTrans *transform.NamespaceTransform, transformRef bool) []*OplogRecord {
+	if nsTrans == nil {
+		return logs
 	}
-}
-
-type LogsGroupCombiner struct {
-	maxGroupNr   int
-	maxGroupSize int
-}
-
-func (combiner LogsGroupCombiner) mergeToGroups(logs []*OplogRecord) (groups []*OplogsGroup) {
-	forceSplit := false
-	sizeInGroup := 0
-
 	for _, log := range logs {
-		op := log.original.partialLog.Operation
-		ns := log.original.partialLog.Namespace
-		// the equivalent oplog.op and oplog.ns can be merged together
-		last := len(groups) - 1
-
-		if !forceSplit && // force split by log's wait function
-				len(groups) > 0 && // have one group existing at least
-				len(groups[last].oplogRecords) < combiner.maxGroupNr && // no more than max group number
-				sizeInGroup + log.original.partialLog.RawSize < combiner.maxGroupSize && // no more than one group size
-				groups[last].op == op && groups[last].ns == ns { // same op and ns
-			// we can merge this oplog into the latest batched oplogRecords group
-			combiner.merge(groups[len(groups)-1], log)
-			sizeInGroup += log.original.partialLog.RawSize // add size
-		} else {
-			// new start of a group
-			groups = append(groups, combiner.startNewGroup(log))
-			sizeInGroup = log.original.partialLog.RawSize
+		partialLog := log.original.partialLog
+		transPartialLog := transformPartialLog(partialLog, nsTrans, transformRef)
+		if transPartialLog != nil {
+			log.original.partialLog = transPartialLog
 		}
-
-		// can't be merge more oplogRecords further. this log should be the end in this group
-		forceSplit = log.wait != nil
 	}
-	return
+	return logs
 }
 
-func (combiner *LogsGroupCombiner) merge(group *OplogsGroup, log *OplogRecord) {
-	group.oplogRecords = append(group.oplogRecords, log)
-	if log.original.callback != nil {
-		group.completionList = append(group.completionList, log.original.callback)
-	}
-}
-
-func (combiner *LogsGroupCombiner) startNewGroup(log *OplogRecord) *OplogsGroup {
-	group := &OplogsGroup{
-		op:           log.original.partialLog.Operation,
-		ns:           log.original.partialLog.Namespace,
-		oplogRecords: []*OplogRecord{log},
-	}
-	if log.original.callback == nil {
-		group.completionList = []func(){}
+func transformPartialLog(partialLog *oplog.PartialLog, nsTrans *transform.NamespaceTransform, transformRef bool) *oplog.PartialLog {
+	db := strings.SplitN(partialLog.Namespace, ".", 2)[0]
+	if partialLog.Operation != "c" {
+		// {"op" : "i", "ns" : "my.system.indexes", "o" : { "v" : 2, "key" : { "date" : 1 }, "name" : "date_1", "ns" : "my.tbl", "expireAfterSeconds" : 3600 }
+		if strings.HasSuffix(partialLog.Namespace, "system.indexes") {
+			value := oplog.GetKey(partialLog.Object, "ns")
+			oplog.SetFiled(partialLog.Object, "ns", nsTrans.Transform(value.(string)))
+		}
+		partialLog.Namespace = nsTrans.Transform(partialLog.Namespace)
+		if transformRef {
+			partialLog.Object = transform.TransformDBRef(partialLog.Object, db, nsTrans)
+		}
 	} else {
-		group.completionList = []func(){log.original.callback}
+		operation, found := oplog.ExtraCommandName(partialLog.Object)
+		if !found {
+			LOG.Warn("extraCommandName meets type[%s] which is not implemented, ignore!", operation)
+			return nil
+		}
+		switch operation {
+		case "create":
+			// { "create" : "my", "idIndex" : { "v" : 2, "key" : { "_id" : 1 }, "name" : "_id_", "ns" : "my.my" }
+			if idIndex := oplog.GetKey(partialLog.Object, "idIndex"); idIndex != nil {
+				if ns := oplog.GetKey(idIndex.(bson.D), "ns"); ns != nil {
+					oplog.SetFiled(idIndex.(bson.D), "ns", nsTrans.Transform(ns.(string)))
+				}
+			} else {
+				LOG.Warn("transformLogs meet unknown create command: %v", partialLog.Object)
+			}
+			fallthrough
+		case "createIndexes":
+			fallthrough
+		case "collMod":
+			fallthrough
+		case "drop":
+			fallthrough
+		case "deleteIndex":
+			fallthrough
+		case "deleteIndexes":
+			fallthrough
+		case "dropIndex":
+			fallthrough
+		case "dropIndexes":
+			fallthrough
+		case "convertToCapped":
+			fallthrough
+		case "emptycapped":
+			col, ok := oplog.GetKey(partialLog.Object, operation).(string)
+			if !ok {
+				LOG.Warn("extraCommandName meets illegal %v oplog %v, ignore!", operation, partialLog.Object)
+				return nil
+			}
+			partialLog.Namespace = nsTrans.Transform(fmt.Sprintf("%s.%s", db, col))
+			oplog.SetFiled(partialLog.Object, operation, strings.SplitN(partialLog.Namespace, ".", 2)[1])
+		case "renameCollection":
+			// { "renameCollection" : "my.tbl", "to" : "my.my", "stayTemp" : false, "dropTarget" : false }
+			fromNs, ok := oplog.GetKey(partialLog.Object, operation).(string)
+			if !ok {
+				LOG.Warn("extraCommandName meets illegal %v oplog %v, ignore!", operation, partialLog.Object)
+				return nil
+			}
+			toNs, ok := oplog.GetKey(partialLog.Object, "to").(string)
+			if !ok {
+				LOG.Warn("extraCommandName meets illegal %v oplog %v, ignore!", operation, partialLog.Object)
+				return nil
+			}
+			partialLog.Namespace = nsTrans.Transform(fromNs)
+			oplog.SetFiled(partialLog.Object, operation, partialLog.Namespace)
+			oplog.SetFiled(partialLog.Object, "to", nsTrans.Transform(toNs))
+		case "applyOps":
+			if ops := oplog.GetKey(partialLog.Object, "applyOps").([]bson.D); ops != nil {
+				for i, ele := range ops {
+					m, keys := oplog.ConvertBsonD2M(ele)
+					subLog := oplog.NewPartialLog(m)
+					transSubLog := transformPartialLog(subLog, nsTrans, transformRef)
+					if transSubLog == nil {
+						LOG.Warn("transformPartialLog sublog %v return nil, ignore!", subLog)
+						return nil
+					}
+					ops[i] = transSubLog.Dump(keys, false)
+				}
+			}
+		default:
+			// such as: dropDatabase
+			partialLog.Namespace = nsTrans.Transform(partialLog.Namespace)
+		}
 	}
-	return group
+	return partialLog
+}
+
+func (exec *Executor) RestAPI() {
+	type ExecutorInfo struct {
+		Id      int    `json:"id"`
+		Insert  uint64 `json:"insert"`
+		Update  uint64 `json:"update"`
+		Delete  uint64 `json:"delete"`
+		DDL     uint64 `json:"ddl"`
+		Unknown uint64 `json:"unknown"`
+		Error   uint64 `json:"error"`
+		// Noop uint64 `json:"noop"`
+	}
+
+	utils.IncrSyncHttpApi.RegisterAPI("/executor", nimo.HttpGet, func([]byte) interface{} {
+		return &ExecutorInfo{
+			Id:      exec.id,
+			Insert:  exec.metricInsert,
+			Update:  exec.metricUpdate,
+			Delete:  exec.metricDelete,
+			DDL:     exec.metricDDL,
+			Unknown: exec.metricUnknown,
+			Error:   exec.metricError,
+		}
+	})
 }

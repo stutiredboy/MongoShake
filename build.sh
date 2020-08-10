@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 
-set -o errexit
+set -o errexit 
 
 # compile specified module
 modules=(collector receiver)
@@ -60,24 +60,45 @@ info=$info","$t
 
 run_builder='go build -v'
 
-for i in "${modules[@]}" ; do
-	echo "Build ""$i"
-	if [ $DEBUG -eq 1 ]; then
-		$run_builder ${compile_line} -ldflags "-X $info" -gcflags='-N -l' -o "bin/$i" -tags "debug" "src/mongoshake//$i/main/$i.go"
-	else
-		$run_builder ${compile_line} -ldflags "-X $info" -o "bin/$i" "src/mongoshake//$i/main/$i.go"
-	fi
+goos=(linux darwin windows)
+for g in "${goos[@]}"; do
+    export GOOS=$g
+    echo "try build goos=$g"
+    if [ $g != "windows" ]; then
+        build_info="$info -X mongoshake/common.SIGNALPROFILE=31 -X mongoshake/common.SIGNALSTACK=30"
+    else
+        build_info=$info
+    fi
 
-	# execute and show compile messages
-	if [ -f ${output}/"$i" ];then
-		${output}/"$i"
-	fi
+    for i in "${modules[@]}" ; do
+        echo "Build ""$i"
+        
+        # fetch all files in the main directory
+        build_dir="src/mongoshake/$i/main"
+        all_files=""
+        for j in $(ls $build_dir); do
+            all_files="$all_files $build_dir/$j "
+        done
+
+        # build
+        if [ $DEBUG -eq 1 ]; then
+            $run_builder ${compile_line} -ldflags "-X $build_info" -gcflags='-N -l' -o "bin/$i.$g" -tags "debug" $all_files
+        else
+            $run_builder ${compile_line} -ldflags "-X $build_info" -o "bin/$i.$g" $all_files
+        fi
+
+        # execute and show compile messages
+        if [ -f ${output}/"$i" ];then
+            ${output}/"$i"
+        fi
+    done
+    echo "build $g successfully!"
 done
-
 # *.sh
 cp scripts/start.sh ${output}/
 cp scripts/stop.sh ${output}/
 cp scripts/mongoshake-stat ${output}/
+cp scripts/comparison.py ${output}/
 
 
 if [ "Linux" == "$(uname -s)" ];then

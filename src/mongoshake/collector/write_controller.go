@@ -64,6 +64,14 @@ func NewWriteController(worker *Worker) *WriteController {
 	return nil
 }
 
+// set init sync finish timestamp if tunnel is direct
+func (controller *WriteController) SetInitSyncFinishTs(fullSyncFinishPosition int64) {
+	if controller.tunnel.Name() == "direct" {
+		dw := controller.tunnel.(*tunnel.DirectWriter)
+		dw.BatchExecutor.FullFinishTs = fullSyncFinishPosition
+	}
+}
+
 func (controller *WriteController) installModules() bool {
 	for _, m := range orderedModuleList {
 		if m.IsRegistered() {
@@ -88,10 +96,10 @@ func (controller *WriteController) Send(logs []*oplog.GenericOplog, tag uint32) 
 	}
 
 	message := &tunnel.WMessage{
-		TMessage: &tunnel.TMessage {
-			Tag:        tag,
-			Shard:      controller.worker.id,
-			RawLogs:    oplog.LogEntryEncode(logs),
+		TMessage: &tunnel.TMessage{
+			Tag:     tag,
+			Shard:   controller.worker.id,
+			RawLogs: oplog.LogEntryEncode(logs),
 		},
 		ParsedLogs: oplog.LogParsed(logs),
 	}
