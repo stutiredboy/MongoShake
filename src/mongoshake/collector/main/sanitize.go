@@ -174,6 +174,11 @@ func checkDefaultValue() error {
 		conf.Options.IncrSyncShardKey != utils.VarIncrSyncShardKeyCollection {
 		return fmt.Errorf("incr_sync.shard_key should in {auto, id, collection}")
 	}
+	if len(conf.Options.IncrSyncShardByObjectIdWhiteList) != 0 {
+		if conf.Options.IncrSyncShardKey != utils.VarIncrSyncShardKeyCollection {
+			return fmt.Errorf("incr_sync.shard_by_object_id_whitelist should only be set when 'incr_sync.shard_key == collection'")
+		}
+	}
 	if conf.Options.IncrSyncWorker <= 0 || conf.Options.IncrSyncWorker > 256 {
 		return fmt.Errorf("incr_sync.worker should in range [1, 256]")
 	}
@@ -228,6 +233,14 @@ func checkDefaultValue() error {
 	if conf.Options.IncrSyncReaderBufferTime <= 0 {
 		conf.Options.IncrSyncReaderBufferTime = 1
 	}
+
+	/********************************/
+	// set utils
+
+	utils.AppDatabase = conf.Options.CheckpointStorageDb
+	utils.APPConflictDatabase = fmt.Sprintf("%s_%s", utils.AppDatabase, "_conflict")
+	filter.NsShouldBeIgnore[utils.AppDatabase + "."] = true
+	filter.NsShouldBeIgnore[utils.APPConflictDatabase + "."] = true
 
 	return nil
 }
@@ -316,7 +329,9 @@ func checkConflict() error {
 	/*****************************3. incr sync******************************/
 	// set incr_sync.worker = shards number if source is sharding
 	if len(conf.Options.MongoUrls) > 1 {
-		if conf.Options.IncrSyncWorker != len(conf.Options.MongoUrls) {
+		if conf.Options.IncrSyncWorker != len(conf.Options.MongoUrls) &&
+			conf.Options.IncrSyncMongoFetchMethod == utils.VarIncrSyncMongoFetchMethodOplog {
+			// only change when incr_sync.mongo_fetch_method = oplog
 			conf.Options.IncrSyncWorker = len(conf.Options.MongoUrls)
 		}
 		if conf.Options.FilterDDLEnable == true &&
@@ -375,6 +390,12 @@ func checkConflict() error {
 	if conf.Options.FullSyncReaderOplogStoreDisk {
 		if conf.Options.SyncMode != utils.VarSyncModeAll {
 			conf.Options.FullSyncReaderOplogStoreDisk = false
+		}
+	}
+	// only enable 'incr_sync.change_stream.watch_full_document' when tunnel != direct.
+	if conf.Options.IncrSyncChangeStreamWatchFullDocument {
+		if conf.Options.Tunnel == utils.VarTunnelDirect {
+			conf.Options.IncrSyncChangeStreamWatchFullDocument = false
 		}
 	}
 
